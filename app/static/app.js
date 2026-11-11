@@ -1,4 +1,4 @@
-let currentApiKey = localStorage.getItem('X_API_KEY') || 'koya_sec_2026_demo';
+let currentApiKey = sessionStorage.getItem('X_API_KEY') || '';
 let currentSlots = [];
 let myBookingsCursor = null;
 let currentLookupEmail = '';
@@ -81,28 +81,20 @@ async function apiFetch(endpoint, options = {}) {
   const data = await response.json().catch(() => ({}));
 
   if (!response.ok) {
-    throw new Error(data.error || `Request failed with status ${response.status}`);
+    const error = new Error(data.error || `Request failed with status ${response.status}`);
+    error.status = response.status;
+    throw error;
   }
 
   return data;
 }
 
-// Initialize public config and API Key
-async function initConfig() {
-  try {
-    const res = await fetch('/api/public-config');
-    const data = await res.json();
-    if (data.apiKey && !localStorage.getItem('X_API_KEY')) {
-      currentApiKey = data.apiKey;
-    }
-  } catch (err) {
-    console.warn('Could not fetch public config:', err);
-  }
-  inputApiKey.value = currentApiKey;
-}
-
 // Fetch & Render Slots
 async function loadSlots() {
+  if (!currentApiKey) {
+    slotsContainer.innerHTML = '<div class="empty-state">Enter your API key to view appointment slots.</div>';
+    return;
+  }
   slotsContainer.innerHTML = '<div class="loading-state">Loading appointment slots...</div>';
   try {
     const selectedProvider = providerSelect.value;
@@ -121,11 +113,11 @@ async function loadSlots() {
       });
     }
 
-    renderSlots(currentSlots);
+    renderSlots(currentSlots.filter((slot) => Date.parse(slot.start) > Date.now()));
   } catch (err) {
     slotsContainer.innerHTML = `
       <div class="empty-state" style="color: var(--danger);">
-        Failed to load slots: ${err.message}<br>
+        Failed to load slots: ${escapeHtml(err.message)}<br>
         <button class="btn btn-secondary" style="margin-top: 12px;" onclick="loadSlots()">Retry</button>
       </div>`;
   }
@@ -159,7 +151,7 @@ function renderSlots(slots) {
       <div>
         ${
           slot.available
-            ? `<button class="btn btn-primary" style="width: 100%;" onclick="openBookingModal('${slot.id}')">Book Appointment</button>`
+            ? `<button class="btn btn-primary" style="width: 100%;" data-slot-id="${escapeHtml(slot.id)}">Book Appointment</button>`
             : `<button class="btn btn-secondary" style="width: 100%; opacity: 0.6; cursor: not-allowed;" disabled>Slot Unavailable</button>`
         }
       </div>
@@ -173,11 +165,19 @@ function escapeHtml(str) {
   return str.replace(/[&<>'"]/g, (tag) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[tag] || tag));
 }
 
+slotsContainer.addEventListener('click', (event) => {
+  const button = event.target.closest('button[data-slot-id]');
+  if (button) openBookingModal(button.dataset.slotId);
+});
+
 // Booking Modal Logic
-window.openBookingModal = function (slotId) {
+let bookingAttempt = null;
+
+function openBookingModal(slotId) {
   const slot = currentSlots.find((s) => s.id === slotId);
   if (!slot) return;
 
+  bookingAttempt = null;
   modalSlotId.value = slot.id;
   modalSlotProvider.textContent = slot.provider;
   modalSlotTime.textContent = `${formatDateTime(slot.start)} - ${formatDateTime(slot.end)}`;
@@ -187,7 +187,7 @@ window.openBookingModal = function (slotId) {
   document.getElementById('patient-email').value = '';
 
   bookingModal.classList.remove('hidden');
-};
+}
 
 function closeBookingModal() {
   bookingModal.classList.add('hidden');
@@ -204,9 +204,14 @@ formBookSlot.addEventListener('submit', async (e) => {
   btnConfirm.textContent = 'Booking...';
 
   try {
+    const body = JSON.stringify({ slot_id: slotId, name, email });
+    if (bookingAttempt?.body !== body) {
+      bookingAttempt = { body, key: crypto.randomUUID() };
+    }
     const booking = await apiFetch('/bookings', {
       method: 'POST',
-      body: JSON.stringify({ slot_id: slotId, name, email }),
+      headers: { 'Idempotency-Key': bookingAttempt.key },
+      body,
     });
 
     closeBookingModal();
@@ -222,6 +227,7 @@ formBookSlot.addEventListener('submit', async (e) => {
     confirmationModal.classList.remove('hidden');
     loadSlots();
   } catch (err) {
+    if (err.status >= 400 && err.status < 500) bookingAttempt = null;
     modalError.textContent = err.message;
     modalError.classList.remove('hidden');
   } finally {
@@ -236,6 +242,7 @@ btnDismissConfirmation.addEventListener('click', () => {
 
 // Quick Reset Demo Data
 window.triggerQuickReset = async function () {
+  if (!currentApiKey || !confirm('Replace the demo slots and delete all existing demo bookings?')) return;
   try {
     const now = new Date();
     // Create slots 1, 2, 3, 4, 5 days in the future
@@ -375,7 +382,7 @@ async function fetchMyBookings(isAppend = false) {
     }
   } catch (err) {
     if (!isAppend) {
-      myBookingsContainer.innerHTML = `<div class="empty-state" style="color: var(--danger);">Error: ${err.message}</div>`;
+      myBookingsContainer.innerHTML = `<div class="empty-state" style="color: var(--danger);">Error: ${escapeHtml(err.message)}</div>`;
     } else {
       showToast(err.message, 'error');
     }
@@ -413,7 +420,7 @@ btnSaveKey.addEventListener('click', () => {
   const newKey = inputApiKey.value.trim();
   if (newKey) {
     currentApiKey = newKey;
-    localStorage.setItem('X_API_KEY', newKey);
+    sessionStorage.setItem('X_API_KEY', newKey);
     keyModal.classList.add('hidden');
     showToast('API Key updated.');
     loadSlots();
@@ -424,7 +431,4 @@ btnCloseBookingModal.addEventListener('click', closeBookingModal);
 btnCancelModal.addEventListener('click', closeBookingModal);
 
 // Initial Load
-(async function init() {
-  await initConfig();
-  await loadSlots();
-})();
+loadSlots();

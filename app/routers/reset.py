@@ -9,6 +9,7 @@ router = APIRouter(prefix="/reset", tags=["Reset"], dependencies=[Depends(verify
 async def reset_slots(payload: ResetRequest):
     async with get_connection() as conn:
         async with conn.cursor() as cur:
+            await cur.execute("SELECT pg_advisory_xact_lock(0, 1)")
             await cur.execute("DELETE FROM bookings;")
             await cur.execute("DELETE FROM slots;")
             await cur.execute("DELETE FROM idempotency_records;")

@@ -1,6 +1,6 @@
 # Clinic Booking API & Web Portal (Koya Cohort 4 Assessment)
 
-A high-performance, production-ready appointment booking API and patient web interface built with **FastAPI**, **PostgreSQL** (Neon / Docker), and **Pydantic**, satisfying all 5 levels of the [Koya Assessment Specification](https://koyaacademy.com/assessment-api).
+A assessment demo appointment booking API and patient web interface built with **FastAPI**, **PostgreSQL** (Neon / Docker), and **Pydantic**, satisfying all 5 levels of the [Koya Assessment Specification](https://koyaacademy.com/assessment-api).
 
 ---
 
@@ -52,7 +52,7 @@ The application serves a modern, responsive web application at the root URL (`/`
 - **Browse & Filter Slots**: Real-time view of available slots with specialist filter (`Dr Ade`, `Dr Fatima`, etc.).
 - **Book Instantly**: Clean booking form with instant validation, loading feedback, and confirmation view.
 - **My Appointments Tab**: Lookup bookings by email with **Level 4 cursor pagination** ("Load More") and **Level 3 cancellation** ("Cancel Appointment").
-- **Interactive Demos**: Includes a quick "Reset Demo Slots" button and interactive API Key modal.
+- **Interactive Demos**: Enter the configured assessment key from the API Key button. The page retains it for the browser session. Use "Quick Reset Demo Slots" to initialize demo data before recording. Reset clears all bookings.
 
 ---
 
@@ -79,8 +79,10 @@ uv pip install -r requirements.txt
 ### 3. Run Automated Tests
 All 5 levels and concurrency race conditions are verified by pytest:
 ```bash
-pytest -v
+DATABASE_URL=postgresql://postgres:postgres@localhost:5433/clinic_booking_test API_KEY=local-test-key pytest -v
 ```
+
+Create the dedicated test database first. The test suite resets its contents.
 
 ### 4. Start the Application Locally
 ```bash
@@ -101,7 +103,7 @@ Open [http://localhost:8080](http://localhost:8080) in your browser to interact 
    - **Start Command**: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
 3. Add Environment Variables:
    - `DATABASE_URL`: Your Neon PostgreSQL connection string (`postgresql://...sslmode=require`).
-   - `API_KEY`: `koya_sec_2026_demo`
+   - `API_KEY`: A private random value (generate with `openssl rand -hex 32`)
    - `PYTHON_VERSION`: `3.12.6`
 4. Click **Create Web Service**. Your API and Web UI will be live at `https://<your-service>.onrender.com`!
 

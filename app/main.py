@@ -6,7 +6,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.config import API_KEY
 from app.database import close_db, init_db
 from app.routers import bookings, reset, slots
 
@@ -67,10 +66,6 @@ async def generic_exception_handler(request: Request, exc: Exception):
 @app.get("/health", tags=["Health"])
 async def health_check():
     return {"status": "ok"}
-
-@app.get("/api/public-config", tags=["Config"])
-async def public_config():
-    return {"apiKey": API_KEY}
 
 # Routers
 app.include_router(reset.router)

@@ -4,7 +4,9 @@ import json
 import math
 import time
 import uuid
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, status
+from fastapi.responses import JSONResponse
+from pydantic import EmailStr, TypeAdapter, ValidationError
 from psycopg.errors import UniqueViolation
 from app.auth import verify_api_key
 from app.database import get_connection
@@ -12,136 +14,107 @@ from app.models import Booking, NewBooking, PaginatedBookings
 
 router = APIRouter(prefix="/bookings", tags=["Bookings"], dependencies=[Depends(verify_api_key)])
 
-def canonical_body_hash(data: dict) -> str:
-    return json.dumps(data, sort_keys=True)
+email_adapter = TypeAdapter(EmailStr)
+
+
+async def record_attempt(cur, email: str) -> None:
+    await cur.execute("SELECT pg_advisory_xact_lock(2, hashtext(%s))", (email,))
+    now_ms = int(time.time() * 1000)
+    window_ms = 60_000
+    await cur.execute(
+        "DELETE FROM email_attempts WHERE email = %s AND timestamp <= %s",
+        (email, now_ms - window_ms),
+    )
+    await cur.execute(
+        "SELECT count(*) AS count, min(timestamp) AS oldest FROM email_attempts WHERE email = %s",
+        (email,),
+    )
+    attempts = await cur.fetchone()
+    if attempts["count"] >= 5:
+        retry_after = math.ceil((attempts["oldest"] + window_ms - now_ms) / 1000)
+        raise HTTPException(
+            status_code=429,
+            detail="Too many attempts for this email",
+            headers={"Retry-After": str(retry_after)},
+        )
+    await cur.execute(
+        "INSERT INTO email_attempts (email, timestamp) VALUES (%s, %s)",
+        (email, now_ms),
+    )
+
+
+async def insert_booking(cur, payload: NewBooking) -> Booking:
+    await cur.execute("SELECT start FROM slots WHERE id = %s", (payload.slot_id,))
+    slot = await cur.fetchone()
+    if not slot:
+        raise HTTPException(status_code=404, detail="The slot doesn't exist")
+    if slot["start"] <= datetime.now(timezone.utc):
+        raise HTTPException(status_code=400, detail="The slot has already started")
+
+    await cur.execute(
+        """
+        INSERT INTO bookings (id, slot_id, name, email, status, created_at)
+        VALUES (%s, %s, %s, %s, 'confirmed', %s)
+        RETURNING id, slot_id, name, email, status, created_at
+        """,
+        ("b_" + uuid.uuid4().hex, payload.slot_id, payload.name,
+         payload.email, datetime.now(timezone.utc)),
+    )
+    return Booking.model_validate(await cur.fetchone())
+
 
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=Booking)
 async def create_booking(
-    payload: NewBooking,
-    response: Response,
+    body: dict = Body(),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
-    body_dict = payload.model_dump(mode="json")
-    current_body_hash = canonical_body_hash(body_dict)
-
-    async with get_connection() as conn:
-        async with conn.cursor() as cur:
-            # Level 4: Idempotency check
-            if idempotency_key:
-                await cur.execute(
-                    "SELECT status_code, response_body, body_hash FROM idempotency_records WHERE key = %s",
-                    (idempotency_key,),
-                )
-                cached = await cur.fetchone()
-                if cached:
-                    if cached["body_hash"] == current_body_hash:
-                        response.status_code = cached["status_code"]
-                        return json.loads(cached["response_body"])
-                    else:
-                        raise HTTPException(
-                            status_code=422,
-                            detail="Idempotency-Key reused with a different body",
-                        )
-
-            # Level 5: Rate Limiting (at most 5 attempts per email per minute)
-            now_ms = int(time.time() * 1000)
-            window_ms = 60 * 1000
-
-            # Prune old attempts
-            await cur.execute("DELETE FROM email_attempts WHERE timestamp < %s", (now_ms - 300000,))
-
-            # Query attempts in sliding window
+    body_hash = json.dumps(body, sort_keys=True)
+    async with get_connection() as conn, conn.cursor() as cur:
+        # Reset takes this same lock exclusively before replacing the data.
+        await cur.execute("SELECT pg_advisory_xact_lock_shared(0, 1)")
+        if idempotency_key is not None:
+            await cur.execute("SELECT pg_advisory_xact_lock(1, hashtext(%s))", (idempotency_key,))
             await cur.execute(
-                "SELECT timestamp FROM email_attempts WHERE email = %s AND timestamp >= %s ORDER BY timestamp ASC",
-                (payload.email, now_ms - window_ms),
+                "SELECT status_code, response_body, body_hash FROM idempotency_records WHERE key = %s",
+                (idempotency_key,),
             )
-            recent_attempts = await cur.fetchall()
+            cached = await cur.fetchone()
+            if cached:
+                if cached["body_hash"] != body_hash:
+                    raise HTTPException(status_code=422, detail="Idempotency-Key reused with a different body")
+                return JSONResponse(json.loads(cached["response_body"]), status_code=cached["status_code"])
 
-            if len(recent_attempts) >= 5:
-                oldest_timestamp = recent_attempts[0]["timestamp"]
-                remaining_ms = oldest_timestamp + window_ms - now_ms
-                retry_after = max(1, math.ceil(remaining_ms / 1000))
-                await conn.commit()
-                response.headers["Retry-After"] = str(retry_after)
-                raise HTTPException(
-                    status_code=429,
-                    detail="Too many attempts for this email",
-                    headers={"Retry-After": str(retry_after)},
-                )
+        # A valid email identifies the rate-limit bucket even when another field is invalid.
+        try:
+            raw_email = body.get("email")
+            email = email_adapter.validate_python(raw_email.strip().lower() if isinstance(raw_email, str) else raw_email)
+        except ValidationError:
+            raise HTTPException(status_code=400, detail="A valid email is required")
+        await record_attempt(cur, email)
 
-            # Record this attempt (failed attempts count too!)
+        # Roll back a conflicting insert without losing the attempt or its cached response.
+        try:
+            async with conn.transaction():
+                payload = NewBooking.model_validate(body)
+                booking = await insert_booking(cur, payload)
+            response_code, response_body = 201, booking.model_dump(mode="json")
+        except ValidationError as exc:
+            field = exc.errors()[0]["loc"][0]
+            response_code, response_body = 400, {"error": f"Invalid {field}"}
+        except HTTPException as exc:
+            response_code, response_body = exc.status_code, {"error": exc.detail}
+        except UniqueViolation:
+            response_code, response_body = 409, {"error": "Slot already booked"}
+
+        if idempotency_key is not None:
             await cur.execute(
-                "INSERT INTO email_attempts (email, timestamp) VALUES (%s, %s)",
-                (payload.email, now_ms),
+                """
+                INSERT INTO idempotency_records (key, body_hash, status_code, response_body, created_at)
+                VALUES (%s, %s, %s, %s, %s)
+                """,
+                (idempotency_key, body_hash, response_code, json.dumps(response_body), datetime.now(timezone.utc)),
             )
-            await conn.commit()
-
-            # Level 2: Slot existence & Start time validation
-            await cur.execute('SELECT id, start FROM slots WHERE id = %s FOR SHARE', (payload.slot_id,))
-            slot = await cur.fetchone()
-            if not slot:
-                raise HTTPException(status_code=404, detail="The slot doesn't exist")
-
-            now_utc = datetime.now(timezone.utc)
-            slot_start = slot["start"]
-            if slot_start.tzinfo is None:
-                slot_start = slot_start.replace(tzinfo=timezone.utc)
-
-            if slot_start <= now_utc:
-                raise HTTPException(status_code=400, detail="The slot has already started")
-
-            # Level 3: Concurrency check & insert
-            await cur.execute(
-                "SELECT id FROM bookings WHERE slot_id = %s AND status = 'confirmed'",
-                (payload.slot_id,),
-            )
-            if await cur.fetchone():
-                raise HTTPException(status_code=409, detail="Slot already booked")
-
-            booking_id = "b_" + uuid.uuid4().hex[:14]
-            created_at = datetime.now(timezone.utc)
-
-            try:
-                await cur.execute(
-                    """
-                    INSERT INTO bookings (id, slot_id, name, email, status, created_at)
-                    VALUES (%s, %s, %s, %s, 'confirmed', %s)
-                    RETURNING id, slot_id, name, email, status, created_at
-                    """,
-                    (booking_id, payload.slot_id, payload.name, payload.email, created_at),
-                )
-                booking_row = await cur.fetchone()
-            except UniqueViolation:
-                await conn.rollback()
-                raise HTTPException(status_code=409, detail="Slot already booked")
-
-            booking_obj = Booking(
-                id=booking_row["id"],
-                slot_id=booking_row["slot_id"],
-                name=booking_row["name"],
-                email=booking_row["email"],
-                status=booking_row["status"],
-                created_at=booking_row["created_at"],
-            )
-
-            # Save idempotency record if requested
-            if idempotency_key:
-                await cur.execute(
-                    """
-                    INSERT INTO idempotency_records (key, body_hash, status_code, response_body, created_at)
-                    VALUES (%s, %s, %s, %s, %s)
-                    """,
-                    (
-                        idempotency_key,
-                        current_body_hash,
-                        201,
-                        booking_obj.model_dump_json(),
-                        created_at,
-                    ),
-                )
-
-            await conn.commit()
-            return booking_obj
+        return JSONResponse(response_body, status_code=response_code)
 
 @router.get("", response_model=PaginatedBookings)
 async def list_person_bookings(
@@ -163,15 +136,17 @@ async def list_person_bookings(
             """
             params = [normalized_email]
 
-            if cursor:
+            if cursor is not None:
                 try:
                     decoded = json.loads(base64.urlsafe_b64decode(cursor.encode()).decode())
                     cursor_created = datetime.fromisoformat(decoded["c"])
                     cursor_id = decoded["id"]
+                    if not isinstance(cursor_id, str) or cursor_created.tzinfo is None:
+                        raise ValueError("Invalid cursor values")
                     query += " AND (created_at > %s OR (created_at = %s AND id > %s))"
                     params.extend([cursor_created, cursor_created, cursor_id])
-                except Exception:
-                    pass
+                except (ValueError, KeyError, TypeError):
+                    raise HTTPException(status_code=400, detail="Invalid cursor")
 
             query += " ORDER BY created_at ASC, id ASC LIMIT %s"
             params.append(limit + 1)

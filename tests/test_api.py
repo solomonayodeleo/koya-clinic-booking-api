@@ -270,3 +270,32 @@ async def test_level_5_rate_limiting():
             headers=HEADERS,
         )
         assert res_other.status_code == 201
+
+
+@pytest.mark.asyncio
+async def test_concurrent_idempotent_retries():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        headers = {**HEADERS, "Idempotency-Key": "simultaneous-retry"}
+        body = {"slot_id": "s1", "name": "Retry User", "email": "retry@example.com"}
+        replies = await asyncio.gather(
+            *(client.post("/bookings", json=body, headers=headers) for _ in range(8))
+        )
+        assert all(reply.status_code == 201 for reply in replies)
+        assert all(reply.json() == replies[0].json() for reply in replies)
+
+        page = await client.get("/bookings", params={"email": body["email"]}, headers=HEADERS)
+        assert page.json()["bookings"] == [replies[0].json()]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_failed_attempts_are_rate_limited():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        body = {"slot_id": "s1", "email": "failed@example.com"}
+        replies = await asyncio.gather(
+            *(client.post("/bookings", json=body, headers=HEADERS) for _ in range(8))
+        )
+        assert sorted(reply.status_code for reply in replies) == [400] * 5 + [429] * 3
+        assert all(1 <= int(reply.headers["Retry-After"]) <= 60
+                   for reply in replies if reply.status_code == 429)
