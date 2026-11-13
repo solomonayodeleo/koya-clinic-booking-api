@@ -1,11 +1,29 @@
-from fastapi import APIRouter, Query
-from app.auth import APIKeyRoute
+from fastapi import APIRouter, Query, Security
+from app.auth import APIKeyRoute, api_key_header
 from app.database import get_connection
-from app.models import SlotWithAvailability
+from app.models import ErrorResponse, SlotWithAvailability
 
-router = APIRouter(prefix="/slots", tags=["Slots"], route_class=APIKeyRoute)
+router = APIRouter(
+    prefix="/slots",
+    tags=["Slots"],
+    route_class=APIKeyRoute,
+    dependencies=[Security(api_key_header)],
+    responses={
+        401: {"model": ErrorResponse, "description": "Missing or invalid X-API-Key"},
+        "default": {"model": ErrorResponse, "description": "Request failed"},
+    },
+)
 
-@router.get("", response_model=dict[str, list[SlotWithAvailability]])
+@router.get(
+    "",
+    response_model=dict[str, list[SlotWithAvailability]],
+    summary="List slots",
+    response_description="Slots with their current availability",
+    description=(
+        "Returns slots ordered by start time, earliest first. "
+        "A slot with a confirmed booking has `available: false`."
+    ),
+)
 async def list_slots(provider: str | None = Query(default=None, description="Only this provider's slots (exact match)")):
     async with get_connection() as conn:
         async with conn.cursor() as cur:

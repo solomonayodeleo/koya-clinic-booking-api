@@ -8,6 +8,7 @@ from app.config import DATABASE_URL
 pool: AsyncConnectionPool | None = None
 
 async def init_db():
+    """Open the pool and create the tables and indexes on startup."""
     global pool
     if pool is None:
         pool = AsyncConnectionPool(

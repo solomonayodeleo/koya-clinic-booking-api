@@ -18,7 +18,10 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Clinic Booking API",
     version="1.0.0",
-    description="Task 1 — Koya Cohort 4 Assessment Booking API (Levels 1–5)",
+    description=(
+        "List clinic slots, create and cancel bookings, and look up booking history. "
+        "Use **Authorize** to send the configured `X-API-Key` with assessment requests."
+    ),
     lifespan=lifespan,
 )
 
@@ -63,8 +66,14 @@ async def generic_exception_handler(request: Request, exc: Exception):
     )
 
 # Public endpoints
-@app.get("/health", tags=["Health"])
-async def health_check():
+@app.get(
+    "/health",
+    tags=["Health"],
+    summary="Check service health",
+    response_description="The service is running",
+)
+async def health_check() -> dict[str, str]:
+    """Public health check used by the hosting platform."""
     return {"status": "ok"}
 
 # Routers

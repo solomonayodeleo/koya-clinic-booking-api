@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Literal
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 class Slot(BaseModel):
     id: str
@@ -57,7 +57,7 @@ class Booking(BaseModel):
 
 class PaginatedBookings(BaseModel):
     bookings: list[Booking]
-    next_cursor: str | None
+    next_cursor: str | None = Field(description="Cursor for the next page, or null on the last page")
 
 class ErrorResponse(BaseModel):
-    error: str
+    error: str = Field(description="Reason the request failed")

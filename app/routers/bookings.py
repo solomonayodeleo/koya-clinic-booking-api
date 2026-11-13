@@ -4,20 +4,30 @@ import json
 import math
 import time
 import uuid
-from fastapi import APIRouter, Body, Header, HTTPException, Query, status
+from fastapi import APIRouter, Body, Header, HTTPException, Path, Query, Security, status
 from fastapi.responses import JSONResponse
 from pydantic import EmailStr, TypeAdapter, ValidationError
 from psycopg.errors import UniqueViolation
-from app.auth import APIKeyRoute
+from app.auth import APIKeyRoute, api_key_header
 from app.database import get_connection
-from app.models import Booking, NewBooking, PaginatedBookings
+from app.models import Booking, ErrorResponse, NewBooking, PaginatedBookings
 
-router = APIRouter(prefix="/bookings", tags=["Bookings"], route_class=APIKeyRoute)
+router = APIRouter(
+    prefix="/bookings",
+    tags=["Bookings"],
+    route_class=APIKeyRoute,
+    dependencies=[Security(api_key_header)],
+    responses={
+        401: {"model": ErrorResponse, "description": "Missing or invalid X-API-Key"},
+        "default": {"model": ErrorResponse, "description": "Request failed"},
+    },
+)
 
 email_adapter = TypeAdapter(EmailStr)
 
 
 async def record_attempt(cur, email: str) -> None:
+    """Check and record an attempt while holding a lock for this email."""
     await cur.execute("SELECT pg_advisory_xact_lock(2, hashtext(%s))", (email,))
     now_ms = int(time.time() * 1000)
     window_ms = 60_000
@@ -63,11 +73,47 @@ async def insert_booking(cur, payload: NewBooking) -> Booking:
     return Booking.model_validate(await cur.fetchone())
 
 
-@router.post("", status_code=status.HTTP_201_CREATED, response_model=Booking)
+@router.post(
+    "",
+    status_code=status.HTTP_201_CREATED,
+    response_model=Booking,
+    summary="Book a slot",
+    response_description="Confirmed booking",
+    responses={
+        400: {"model": ErrorResponse, "description": "Missing/invalid field or slot has already started"},
+        404: {"model": ErrorResponse, "description": "Slot not found"},
+        409: {"model": ErrorResponse, "description": "Slot already booked"},
+        422: {"model": ErrorResponse, "description": "Idempotency-Key reused with a different body"},
+        429: {
+            "model": ErrorResponse,
+            "description": "Too many attempts for this email",
+            "headers": {
+                "Retry-After": {
+                    "description": "Whole seconds to wait before retrying",
+                    "schema": {"type": "integer"},
+                },
+            },
+        },
+    },
+)
 async def create_booking(
-    body: dict = Body(),
-    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    body: dict = Body(
+        json_schema_extra=NewBooking.model_json_schema(),
+        openapi_examples={
+            "booking": {"value": {"slot_id": "s1", "name": "Ada Obi", "email": "ada@example.com"}},
+        },
+    ),
+    idempotency_key: str | None = Header(
+        default=None,
+        alias="Idempotency-Key",
+        description="Reuse the same key and JSON body to receive the original booking response.",
+    ),
 ):
+    """Book a future slot. Names and emails are trimmed, and emails are stored in lowercase.
+
+    Up to five attempts per email are accepted in 60 seconds, including failed attempts.
+    Replays of a saved response do not count as new attempts.
+    """
     body_hash = json.dumps(body, sort_keys=True)
     async with get_connection() as conn, conn.cursor() as cur:
         # Reset takes this same lock exclusively before replacing the data.
@@ -116,11 +162,22 @@ async def create_booking(
             )
         return JSONResponse(response_body, status_code=response_code)
 
-@router.get("", response_model=PaginatedBookings)
+@router.get(
+    "",
+    response_model=PaginatedBookings,
+    summary="List a person's bookings",
+    description=(
+        "Returns bookings for the given email, oldest first. "
+        "Pass next_cursor as cursor to get the next page. A null next_cursor marks the last page."
+    ),
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid limit or cursor"},
+    },
+)
 async def list_person_bookings(
-    email: str = Query(..., description="Email to list bookings for"),
-    limit: int = Query(default=10, description="1 to 50. Anything else returns 400."),
-    cursor: str | None = Query(default=None),
+    email: str = Query(..., description="Patient email, matched without regard to case"),
+    limit: int = Query(default=10, description="Number of bookings per page, from 1 to 50"),
+    cursor: str | None = Query(default=None, description="The next_cursor from the previous page"),
 ):
     if limit < 1 or limit > 50:
         raise HTTPException(status_code=400, detail="Invalid limit: must be between 1 and 50")
@@ -176,8 +233,16 @@ async def list_person_bookings(
 
     return PaginatedBookings(bookings=bookings, next_cursor=next_cursor)
 
-@router.get("/{id}", response_model=Booking)
-async def get_booking(id: str):
+@router.get(
+    "/{id}",
+    response_model=Booking,
+    summary="Get a booking",
+    description="Retrieves a single booking by its unique ID.",
+    responses={
+        404: {"model": ErrorResponse, "description": "No booking with that id"},
+    },
+)
+async def get_booking(id: str = Path(description="ID returned when the booking was created")):
     async with get_connection() as conn:
         async with conn.cursor() as cur:
             await cur.execute(
@@ -197,8 +262,17 @@ async def get_booking(id: str):
         created_at=booking["created_at"],
     )
 
-@router.delete("/{id}", response_model=Booking)
-async def cancel_booking(id: str):
+@router.delete(
+    "/{id}",
+    response_model=Booking,
+    summary="Cancel a booking",
+    description="Sets booking status to `cancelled` and frees the slot for future bookings.",
+    responses={
+        404: {"model": ErrorResponse, "description": "No booking with that id"},
+        409: {"model": ErrorResponse, "description": "Booking already cancelled"},
+    },
+)
+async def cancel_booking(id: str = Path(description="ID of the booking to cancel")):
     async with get_connection() as conn:
         async with conn.cursor() as cur:
             await cur.execute(

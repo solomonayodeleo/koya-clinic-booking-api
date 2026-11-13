@@ -4,6 +4,10 @@ A assessment demo appointment booking API and patient web interface built with *
 
 ---
 
+## API reference
+
+Open `/docs` on the running service for interactive Swagger UI, `/redoc` for the reference, or `/openapi.json` for the machine-readable schema. In Swagger UI, click **Authorize** and enter the configured API key to try the assessment endpoints. The health check at `/health` is public.
+
 ## 🌟 Architecture & Level Breakdown
 
 ### **Level 1 · Core Booking Flow**
@@ -13,7 +17,7 @@ A assessment demo appointment booking API and patient web interface built with *
 - **`GET /bookings/{id}`**: Retrieves a booking by its unique identifier, returning `404` if not found.
 
 ### **Level 2 · Security & Input Validation**
-- **Security (`X-API-Key`)**: All API endpoints require the `X-API-Key` header. Requests with a missing or incorrect key are rejected with `401 Unauthorized` (`{"error": "..."}`).
+- **Security (`X-API-Key`)**: All assessment endpoints require the `X-API-Key` header. Requests with a missing or incorrect key are rejected with `401 Unauthorized` (`{"error": "..."}`).
 - **Data Sanitization**: Pydantic validators automatically trim leading/trailing whitespace from `name` and `email`, and store `email` in lowercase.
 - **Strict Validation**: Returns `400 Bad Request` if `slot_id`, `name`, or `email` is missing or empty, or if the email format is invalid.
 - **Slot Time Guard**: Returns `400 Bad Request` if the target slot has already started (`slot.start <= now()`).
