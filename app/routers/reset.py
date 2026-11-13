@@ -1,9 +1,9 @@
-from fastapi import APIRouter, Depends
-from app.auth import verify_api_key
+from fastapi import APIRouter
+from app.auth import APIKeyRoute
 from app.database import get_connection
 from app.models import ResetRequest
 
-router = APIRouter(prefix="/reset", tags=["Reset"], dependencies=[Depends(verify_api_key)])
+router = APIRouter(prefix="/reset", tags=["Reset"], route_class=APIKeyRoute)
 
 @router.post("", status_code=200)
 async def reset_slots(payload: ResetRequest):

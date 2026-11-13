@@ -1,9 +1,9 @@
-from fastapi import APIRouter, Depends, Query
-from app.auth import verify_api_key
+from fastapi import APIRouter, Query
+from app.auth import APIKeyRoute
 from app.database import get_connection
 from app.models import SlotWithAvailability
 
-router = APIRouter(prefix="/slots", tags=["Slots"], dependencies=[Depends(verify_api_key)])
+router = APIRouter(prefix="/slots", tags=["Slots"], route_class=APIKeyRoute)
 
 @router.get("", response_model=dict[str, list[SlotWithAvailability]])
 async def list_slots(provider: str | None = Query(default=None, description="Only this provider's slots (exact match)")):

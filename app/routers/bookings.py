@@ -4,15 +4,15 @@ import json
 import math
 import time
 import uuid
-from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, status
+from fastapi import APIRouter, Body, Header, HTTPException, Query, status
 from fastapi.responses import JSONResponse
 from pydantic import EmailStr, TypeAdapter, ValidationError
 from psycopg.errors import UniqueViolation
-from app.auth import verify_api_key
+from app.auth import APIKeyRoute
 from app.database import get_connection
 from app.models import Booking, NewBooking, PaginatedBookings
 
-router = APIRouter(prefix="/bookings", tags=["Bookings"], dependencies=[Depends(verify_api_key)])
+router = APIRouter(prefix="/bookings", tags=["Bookings"], route_class=APIKeyRoute)
 
 email_adapter = TypeAdapter(EmailStr)
 
