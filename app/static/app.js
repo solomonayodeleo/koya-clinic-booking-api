@@ -7,7 +7,6 @@ let currentLookupEmail = '';
 const slotsContainer = document.getElementById('slots-container');
 const providerSelect = document.getElementById('provider-select');
 const dateFilter = document.getElementById('date-filter');
-const btnClearDate = document.getElementById('btn-clear-date');
 const timeFilter = document.getElementById('time-filter');
 const slotsSummary = document.getElementById('slots-summary');
 const btnRefreshSlots = document.getElementById('btn-refresh-slots');
@@ -115,8 +114,6 @@ function applySlotFilters() {
   const selectedDate = dateFilter.value;
   const selectedTime = timeFilter.value;
 
-  btnClearDate.classList.toggle('hidden', !selectedDate);
-
   const upcomingSlots = currentSlots.filter((slot) => Date.parse(slot.start) > now);
   const filteredSlots = upcomingSlots.filter((slot) => {
     if (selectedDate && getLocalDateKey(slot.start) !== selectedDate) return false;
@@ -158,6 +155,26 @@ async function loadSlots() {
         opt.textContent = p;
         providerSelect.appendChild(opt);
       });
+    }
+
+    // Populate date select options from loaded slots
+    const previousDate = dateFilter.value;
+    const uniqueDates = [...new Set(currentSlots.map((s) => getLocalDateKey(s.start)))].sort();
+    dateFilter.innerHTML = '<option value="">All Dates</option>';
+    uniqueDates.forEach((dateKey) => {
+      const opt = document.createElement('option');
+      opt.value = dateKey;
+      const [y, m, d] = dateKey.split('-').map(Number);
+      opt.textContent = new Date(y, m - 1, d).toLocaleDateString('en-US', {
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      });
+      dateFilter.appendChild(opt);
+    });
+    if (uniqueDates.includes(previousDate)) {
+      dateFilter.value = previousDate;
     }
 
     applySlotFilters();
@@ -343,18 +360,11 @@ window.resetSlotFilters = function () {
   applySlotFilters();
 };
 
-// Restrict calendar picker minimum date to today
-dateFilter.min = getLocalDateKey(new Date().toISOString());
-
 btnQuickReset.addEventListener('click', triggerQuickReset);
 btnRefreshSlots.addEventListener('click', loadSlots);
 providerSelect.addEventListener('change', loadSlots);
 dateFilter.addEventListener('change', applySlotFilters);
 timeFilter.addEventListener('change', applySlotFilters);
-btnClearDate.addEventListener('click', () => {
-  dateFilter.value = '';
-  applySlotFilters();
-});
 
 // Tab Navigation
 document.querySelectorAll('.tab-btn').forEach((btn) => {
