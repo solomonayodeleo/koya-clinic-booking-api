@@ -7,6 +7,7 @@ let currentLookupEmail = '';
 const slotsContainer = document.getElementById('slots-container');
 const providerSelect = document.getElementById('provider-select');
 const dateFilter = document.getElementById('date-filter');
+const btnClearDate = document.getElementById('btn-clear-date');
 const timeFilter = document.getElementById('time-filter');
 const slotsSummary = document.getElementById('slots-summary');
 const btnRefreshSlots = document.getElementById('btn-refresh-slots');
@@ -110,72 +111,49 @@ function matchesTimePeriod(isoString, period) {
 }
 
 function applySlotFilters() {
-  const now = Date.now();
+  const now = new Date();
+  const weekEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 7);
   const selectedDate = dateFilter.value;
   const selectedTime = timeFilter.value;
 
-  const upcomingSlots = currentSlots.filter((slot) => Date.parse(slot.start) > now);
-  const filteredSlots = upcomingSlots.filter((slot) => {
-    if (selectedDate && getLocalDateKey(slot.start) !== selectedDate) return false;
-    if (!matchesTimePeriod(slot.start, selectedTime)) return false;
-    return true;
+  const selectedProvider = providerSelect.value;
+  const filteredSlots = currentSlots.filter((slot) => {
+    const start = Date.parse(slot.start);
+    const inDateRange = selectedDate
+      ? getLocalDateKey(slot.start) === selectedDate
+      : start < weekEnd;
+    return start > now && inDateRange &&
+      (!selectedProvider || slot.provider === selectedProvider) &&
+      matchesTimePeriod(slot.start, selectedTime);
   });
 
-  if (upcomingSlots.length > 0) {
-    const scopeLabel = selectedDate ? `on ${selectedDate}` : 'across all upcoming dates';
-    slotsSummary.textContent = `Showing ${filteredSlots.length} of ${upcomingSlots.length} upcoming slots ${scopeLabel}.`;
-    slotsSummary.classList.remove('hidden');
-  } else {
-    slotsSummary.classList.add('hidden');
-  }
-
-  renderSlots(filteredSlots, upcomingSlots.length > 0);
+  btnClearDate.classList.toggle('hidden', !selectedDate);
+  const count = filteredSlots.length;
+  const dateScope = selectedDate ? '' : ' in the next 7 days';
+  slotsSummary.textContent = `${count} matching upcoming ${count === 1 ? 'slot' : 'slots'}${dateScope}`;
+  slotsSummary.classList.remove('hidden');
+  renderSlots(filteredSlots, Boolean(selectedDate), Boolean(selectedProvider || selectedTime));
 }
 
-// Fetch & Render Slots
 async function loadSlots() {
   if (!currentApiKey) {
     slotsSummary.classList.add('hidden');
     slotsContainer.innerHTML = '<div class="empty-state">Enter your API key to view appointment slots.</div>';
     return;
   }
+
   slotsContainer.innerHTML = '<div class="loading-state">Loading appointment slots...</div>';
   try {
-    const selectedProvider = providerSelect.value;
-    const url = selectedProvider ? `/slots?provider=${encodeURIComponent(selectedProvider)}` : '/slots';
-    const data = await apiFetch(url);
-    currentSlots = data.slots || [];
+    const data = await apiFetch('/slots');
+    currentSlots = (data.slots || []).sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
 
-    // Populate provider select options if not already populated
-    if (providerSelect.options.length <= 1) {
-      const providers = [...new Set(currentSlots.map((s) => s.provider))];
-      providers.forEach((p) => {
-        const opt = document.createElement('option');
-        opt.value = p;
-        opt.textContent = p;
-        providerSelect.appendChild(opt);
-      });
+    const previousProvider = providerSelect.value;
+    const providers = [...new Set(currentSlots.map((slot) => slot.provider))].sort();
+    providerSelect.innerHTML = '<option value="">All Specialists</option>';
+    for (const provider of providers) {
+      providerSelect.add(new Option(provider, provider));
     }
-
-    // Populate date select options from loaded slots
-    const previousDate = dateFilter.value;
-    const uniqueDates = [...new Set(currentSlots.map((s) => getLocalDateKey(s.start)))].sort();
-    dateFilter.innerHTML = '<option value="">All Dates</option>';
-    uniqueDates.forEach((dateKey) => {
-      const opt = document.createElement('option');
-      opt.value = dateKey;
-      const [y, m, d] = dateKey.split('-').map(Number);
-      opt.textContent = new Date(y, m - 1, d).toLocaleDateString('en-US', {
-        weekday: 'short',
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric',
-      });
-      dateFilter.appendChild(opt);
-    });
-    if (uniqueDates.includes(previousDate)) {
-      dateFilter.value = previousDate;
-    }
+    if (providers.includes(previousProvider)) providerSelect.value = previousProvider;
 
     applySlotFilters();
   } catch (err) {
@@ -188,21 +166,19 @@ async function loadSlots() {
   }
 }
 
-function renderSlots(slots, hasUpcomingSlots = false) {
+function renderSlots(slots, hasDateFilter, hasOtherFilters) {
   if (!slots.length) {
-    if (hasUpcomingSlots) {
-      slotsContainer.innerHTML = `
-        <div class="empty-state">
-          No appointment slots match the selected date or time filter.<br>
-          <button class="btn btn-secondary" style="margin-top: 12px;" onclick="resetSlotFilters()">Show All Upcoming Dates</button>
-        </div>`;
-    } else {
-      slotsContainer.innerHTML = `
-        <div class="empty-state">
-          No appointment slots available.<br>
-          <button class="btn btn-primary" style="margin-top: 12px;" onclick="triggerQuickReset()">Load Demo Slots</button>
-        </div>`;
-    }
+    const message = hasDateFilter
+      ? 'No upcoming slots match your filters on this date.'
+      : 'No upcoming slots match your filters.';
+    const action = hasDateFilter
+      ? '<button type="button" class="btn btn-secondary" data-clear-date>Show Next 7 Days</button>'
+      : '';
+    slotsContainer.innerHTML = `
+      <div class="empty-state">
+        ${hasDateFilter || hasOtherFilters ? message : 'No upcoming appointment slots in the next 7 days.'}
+        ${action}
+      </div>`;
     return;
   }
 
@@ -239,6 +215,10 @@ function escapeHtml(str) {
 }
 
 slotsContainer.addEventListener('click', (event) => {
+  if (event.target.closest('button[data-clear-date]')) {
+    clearDateFilter();
+    return;
+  }
   const button = event.target.closest('button[data-slot-id]');
   if (button) openBookingModal(button.dataset.slotId);
 });
@@ -314,7 +294,7 @@ btnDismissConfirmation.addEventListener('click', () => {
 });
 
 // Quick Reset Demo Data
-window.triggerQuickReset = async function () {
+async function triggerQuickReset() {
   if (!currentApiKey || !confirm('Replace the demo slots and delete all existing demo bookings?')) return;
   try {
     const now = new Date();
@@ -323,11 +303,11 @@ window.triggerQuickReset = async function () {
       'Dr Fatima (Pediatrician)',
       'Dr John (General Physician)',
     ];
-    const slotHours = [9, 12, 15];
     const totalDays = 35;
     const slots = [];
 
     for (let day = 1; day <= totalDays; day++) {
+      const slotHours = [9, 12, day % 2 ? 15 : 17];
       for (let i = 0; i < providers.length; i++) {
         const provider = providers[(day + i) % providers.length];
         const hour = slotHours[i];
@@ -348,21 +328,22 @@ window.triggerQuickReset = async function () {
     });
 
     showToast(`Demo slots reset successfully! Created ${slots.length} slots over the next ${totalDays} days.`);
-    loadSlots();
+    await loadSlots();
   } catch (err) {
     showToast(`Reset failed: ${err.message}`, 'error');
   }
-};
+}
 
-window.resetSlotFilters = function () {
+function clearDateFilter() {
   dateFilter.value = '';
-  timeFilter.value = '';
   applySlotFilters();
-};
+  dateFilter.focus();
+}
 
 btnQuickReset.addEventListener('click', triggerQuickReset);
 btnRefreshSlots.addEventListener('click', loadSlots);
-providerSelect.addEventListener('change', loadSlots);
+providerSelect.addEventListener('change', applySlotFilters);
+btnClearDate.addEventListener('click', clearDateFilter);
 dateFilter.addEventListener('change', applySlotFilters);
 timeFilter.addEventListener('change', applySlotFilters);
 

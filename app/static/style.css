@@ -178,16 +178,37 @@ body {
 }
 
 .filter-controls {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 16px;
+  flex: 1 0 min(100%, 520px);
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: start;
+  gap: clamp(6px, 2vw, 16px);
 }
 
 .filter-group {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.filter-group :is(select, input) {
+  width: 100%;
+  min-width: 0;
+  padding-inline: clamp(4px, 1vw, 12px);
+  min-height: 40px;
+}
+
+.filter-group .btn-ghost-sm {
+  justify-self: start;
+}
+
+.slots-grid > :is(.empty-state, .loading-state) {
+  grid-column: 1 / -1;
+}
+
+.slots-grid .empty-state button {
+  display: block;
+  margin: 12px auto 0;
 }
 
 .filter-group label {
@@ -322,7 +343,7 @@ body {
 /* Slots Grid */
 .slots-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr));
   gap: 20px;
 }
 
