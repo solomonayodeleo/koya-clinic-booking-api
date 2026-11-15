@@ -71,14 +71,32 @@
     <section id="tab-slots" class="tab-panel active">
       <!-- Filter Bar -->
       <div class="filter-bar">
-        <div class="filter-group">
-          <label for="provider-select">Filter by Specialist:</label>
-          <select id="provider-select" class="form-select">
-            <option value="">All Specialists</option>
-          </select>
+        <div class="filter-controls">
+          <div class="filter-group">
+            <label for="provider-select">Specialist:</label>
+            <select id="provider-select" class="form-select">
+              <option value="">All Specialists</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <label for="date-filter">Date:</label>
+            <input type="date" id="date-filter" class="form-input" aria-label="Filter by calendar date">
+            <button id="btn-clear-date" class="btn btn-ghost-sm hidden" type="button">All Dates</button>
+          </div>
+          <div class="filter-group">
+            <label for="time-filter">Time:</label>
+            <select id="time-filter" class="form-select">
+              <option value="">All Times</option>
+              <option value="morning">Morning (Before 12:00)</option>
+              <option value="afternoon">Afternoon (12:00 - 17:00)</option>
+              <option value="evening">Evening (17:00+)</option>
+            </select>
+          </div>
         </div>
         <button id="btn-refresh-slots" class="btn btn-secondary">↻ Refresh Slots</button>
       </div>
+
+      <div id="slots-summary" class="slots-summary hidden"></div>
 
       <!-- Notification Toast -->
       <div id="toast" class="toast hidden"></div>

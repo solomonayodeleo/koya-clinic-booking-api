@@ -6,6 +6,10 @@ let currentLookupEmail = '';
 // DOM Elements
 const slotsContainer = document.getElementById('slots-container');
 const providerSelect = document.getElementById('provider-select');
+const dateFilter = document.getElementById('date-filter');
+const btnClearDate = document.getElementById('btn-clear-date');
+const timeFilter = document.getElementById('time-filter');
+const slotsSummary = document.getElementById('slots-summary');
 const btnRefreshSlots = document.getElementById('btn-refresh-slots');
 const btnQuickReset = document.getElementById('btn-quick-reset');
 const toastEl = document.getElementById('toast');
@@ -89,9 +93,52 @@ async function apiFetch(endpoint, options = {}) {
   return data;
 }
 
+function getLocalDateKey(isoString) {
+  const d = new Date(isoString);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function matchesTimePeriod(isoString, period) {
+  if (!period) return true;
+  const hour = new Date(isoString).getHours();
+  if (period === 'morning') return hour < 12;
+  if (period === 'afternoon') return hour >= 12 && hour < 17;
+  if (period === 'evening') return hour >= 17;
+  return true;
+}
+
+function applySlotFilters() {
+  const now = Date.now();
+  const selectedDate = dateFilter.value;
+  const selectedTime = timeFilter.value;
+
+  btnClearDate.classList.toggle('hidden', !selectedDate);
+
+  const upcomingSlots = currentSlots.filter((slot) => Date.parse(slot.start) > now);
+  const filteredSlots = upcomingSlots.filter((slot) => {
+    if (selectedDate && getLocalDateKey(slot.start) !== selectedDate) return false;
+    if (!matchesTimePeriod(slot.start, selectedTime)) return false;
+    return true;
+  });
+
+  if (upcomingSlots.length > 0) {
+    const scopeLabel = selectedDate ? `on ${selectedDate}` : 'across all upcoming dates';
+    slotsSummary.textContent = `Showing ${filteredSlots.length} of ${upcomingSlots.length} upcoming slots ${scopeLabel}.`;
+    slotsSummary.classList.remove('hidden');
+  } else {
+    slotsSummary.classList.add('hidden');
+  }
+
+  renderSlots(filteredSlots, upcomingSlots.length > 0);
+}
+
 // Fetch & Render Slots
 async function loadSlots() {
   if (!currentApiKey) {
+    slotsSummary.classList.add('hidden');
     slotsContainer.innerHTML = '<div class="empty-state">Enter your API key to view appointment slots.</div>';
     return;
   }
@@ -113,8 +160,9 @@ async function loadSlots() {
       });
     }
 
-    renderSlots(currentSlots.filter((slot) => Date.parse(slot.start) > Date.now()));
+    applySlotFilters();
   } catch (err) {
+    slotsSummary.classList.add('hidden');
     slotsContainer.innerHTML = `
       <div class="empty-state" style="color: var(--danger);">
         Failed to load slots: ${escapeHtml(err.message)}<br>
@@ -123,13 +171,21 @@ async function loadSlots() {
   }
 }
 
-function renderSlots(slots) {
+function renderSlots(slots, hasUpcomingSlots = false) {
   if (!slots.length) {
-    slotsContainer.innerHTML = `
-      <div class="empty-state">
-        No appointment slots available.<br>
-        <button class="btn btn-primary" style="margin-top: 12px;" onclick="triggerQuickReset()">Load Demo Slots</button>
-      </div>`;
+    if (hasUpcomingSlots) {
+      slotsContainer.innerHTML = `
+        <div class="empty-state">
+          No appointment slots match the selected date or time filter.<br>
+          <button class="btn btn-secondary" style="margin-top: 12px;" onclick="resetSlotFilters()">Show All Upcoming Dates</button>
+        </div>`;
+    } else {
+      slotsContainer.innerHTML = `
+        <div class="empty-state">
+          No appointment slots available.<br>
+          <button class="btn btn-primary" style="margin-top: 12px;" onclick="triggerQuickReset()">Load Demo Slots</button>
+        </div>`;
+    }
     return;
   }
 
@@ -245,61 +301,60 @@ window.triggerQuickReset = async function () {
   if (!currentApiKey || !confirm('Replace the demo slots and delete all existing demo bookings?')) return;
   try {
     const now = new Date();
-    // Create slots 1, 2, 3, 4, 5 days in the future
-    const slots = [
-      {
-        id: 'slot-ade-1',
-        provider: 'Dr Ade (Cardiologist)',
-        start: new Date(now.getTime() + 1 * 86400000 + 3600000 * 2).toISOString(),
-        end: new Date(now.getTime() + 1 * 86400000 + 3600000 * 3).toISOString(),
-      },
-      {
-        id: 'slot-ade-2',
-        provider: 'Dr Ade (Cardiologist)',
-        start: new Date(now.getTime() + 1 * 86400000 + 3600000 * 4).toISOString(),
-        end: new Date(now.getTime() + 1 * 86400000 + 3600000 * 5).toISOString(),
-      },
-      {
-        id: 'slot-fatima-1',
-        provider: 'Dr Fatima (Pediatrician)',
-        start: new Date(now.getTime() + 2 * 86400000 + 3600000 * 1).toISOString(),
-        end: new Date(now.getTime() + 2 * 86400000 + 3600000 * 2).toISOString(),
-      },
-      {
-        id: 'slot-fatima-2',
-        provider: 'Dr Fatima (Pediatrician)',
-        start: new Date(now.getTime() + 2 * 86400000 + 3600000 * 3).toISOString(),
-        end: new Date(now.getTime() + 2 * 86400000 + 3600000 * 4).toISOString(),
-      },
-      {
-        id: 'slot-john-1',
-        provider: 'Dr John (General Physician)',
-        start: new Date(now.getTime() + 3 * 86400000 + 3600000 * 2).toISOString(),
-        end: new Date(now.getTime() + 3 * 86400000 + 3600000 * 3).toISOString(),
-      },
-      {
-        id: 'slot-john-2',
-        provider: 'Dr John (General Physician)',
-        start: new Date(now.getTime() + 3 * 86400000 + 3600000 * 5).toISOString(),
-        end: new Date(now.getTime() + 3 * 86400000 + 3600000 * 6).toISOString(),
-      },
+    const providers = [
+      'Dr Ade (Cardiologist)',
+      'Dr Fatima (Pediatrician)',
+      'Dr John (General Physician)',
     ];
+    const slotHours = [9, 12, 15];
+    const totalDays = 35;
+    const slots = [];
+
+    for (let day = 1; day <= totalDays; day++) {
+      for (let i = 0; i < providers.length; i++) {
+        const provider = providers[(day + i) % providers.length];
+        const hour = slotHours[i];
+        const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() + day, hour, 0, 0, 0);
+        const end = new Date(start.getTime() + 60 * 60 * 1000);
+        slots.push({
+          id: `slot-d${day}-${i + 1}`,
+          provider,
+          start: start.toISOString(),
+          end: end.toISOString(),
+        });
+      }
+    }
 
     await apiFetch('/reset', {
       method: 'POST',
       body: JSON.stringify({ slots }),
     });
 
-    showToast('Demo slots reset successfully! Level 1 verified.');
+    showToast(`Demo slots reset successfully! Created ${slots.length} slots over the next ${totalDays} days.`);
     loadSlots();
   } catch (err) {
     showToast(`Reset failed: ${err.message}`, 'error');
   }
 };
 
+window.resetSlotFilters = function () {
+  dateFilter.value = '';
+  timeFilter.value = '';
+  applySlotFilters();
+};
+
+// Restrict calendar picker minimum date to today
+dateFilter.min = getLocalDateKey(new Date().toISOString());
+
 btnQuickReset.addEventListener('click', triggerQuickReset);
 btnRefreshSlots.addEventListener('click', loadSlots);
 providerSelect.addEventListener('change', loadSlots);
+dateFilter.addEventListener('change', applySlotFilters);
+timeFilter.addEventListener('change', applySlotFilters);
+btnClearDate.addEventListener('click', () => {
+  dateFilter.value = '';
+  applySlotFilters();
+});
 
 // Tab Navigation
 document.querySelectorAll('.tab-btn').forEach((btn) => {

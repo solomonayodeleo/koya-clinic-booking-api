@@ -172,7 +172,14 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 24px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.filter-controls {
+  display: flex;
+  align-items: center;
   flex-wrap: wrap;
   gap: 16px;
 }
@@ -180,13 +187,24 @@ body {
 .filter-group {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
 }
 
 .filter-group label {
   font-weight: 500;
   font-size: 14px;
   color: var(--text-muted);
+}
+
+.slots-summary {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 16px;
+}
+
+.slots-summary.hidden,
+.btn-ghost-sm.hidden {
+  display: none;
 }
 
 /* Form Controls */
